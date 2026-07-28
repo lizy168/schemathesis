@@ -192,9 +192,6 @@ def _to_json_schema(
     if convert_if_then_else:
         _rewrite_if_then_else(schema)
 
-    if schema_type == "array":
-        _rewrite_allof_of_contains_consts(schema)
-
     if not is_response_schema:
         _pin_discriminator_property(schema, name_to_uri, bundle)
 
@@ -346,44 +343,6 @@ def _branch_is_polymorphic(ref: str, bundle: dict[str, Any] | None) -> bool:
     if not isinstance(bundled, dict):
         return False
     return "oneOf" in bundled or "anyOf" in bundled
-
-
-def _rewrite_allof_of_contains_consts(schema: dict[str, Any]) -> None:
-    # `allOf: [{contains: {const: A}}, {contains: {const: B}}, ...]` can't be merged by
-    # hypothesis-jsonschema, so it falls back to filtering and exhausts. Rewriting the
-    # required consts as a positional `items` prefix forces them into the array up front.
-    all_of = schema.get("allOf")
-    if not isinstance(all_of, list) or len(all_of) < 2:
-        return
-    if isinstance(schema.get("items"), list):
-        return
-    consts = []
-    keep = []
-    for entry in all_of:
-        if (
-            isinstance(entry, dict)
-            and len(entry) == 1
-            and isinstance(entry.get("contains"), dict)
-            and entry["contains"].keys() == {"const"}
-        ):
-            # A single-value `enum`, not `const`: OpenAPI 3.0 schemas are read as draft 4, which
-            # has no `const` and would silently leave the position unconstrained.
-            consts.append({"enum": [entry["contains"]["const"]]})
-        else:
-            keep.append(entry)
-    if len(consts) < 2:
-        return
-    original_items = schema.get("items")
-    if isinstance(original_items, dict):
-        schema["additionalItems"] = original_items
-    schema["items"] = consts
-    if keep:
-        schema["allOf"] = keep
-    else:
-        schema.pop("allOf", None)
-    min_items = schema.get("minItems")
-    if not isinstance(min_items, int) or min_items < len(consts):
-        schema["minItems"] = len(consts)
 
 
 def _rewrite_if_then_else(schema: dict[str, Any]) -> None:

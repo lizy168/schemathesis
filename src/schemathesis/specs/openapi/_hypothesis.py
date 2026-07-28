@@ -1204,7 +1204,7 @@ def make_positive_strategy(
 def _canonical_strategy_or_none(
     schema: JsonSchema, generation_config: GenerationConfig, validator_cls: type[jsonschema_rs.Validator]
 ) -> st.SearchStrategy[JsonValue] | None:
-    """Strategy for a fully modeled document; `None` routes to hypothesis-jsonschema."""
+    """Strategy for a fully modeled document; `None` when the schema is not one."""
     try:
         key = (
             schema_cache_key(schema),
@@ -1241,7 +1241,7 @@ def _build_canonical_strategy(
         return None
     if canonical_schema.kind == "raw":
         return None
-    # Handle unsatisfiability via `hypothesis-jsonschema` for now
+    # Unsatisfiable schemas are not modeled here for now
     if not canonical_schema.is_satisfiable():
         return None
     context = StrategyContext(
@@ -1249,9 +1249,13 @@ def _build_canonical_strategy(
         formats=_build_custom_formats(generation_config, GenerationMode.POSITIVE),
     )
     try:
-        return canonical_from_schema(canonical_schema, context)
+        strategy = canonical_from_schema(canonical_schema, context)
     except UnsupportedView:
         return None
+    if strategy.is_empty:
+        # Laying out the positions can expose a contradiction canonicalization does not see.
+        return None
+    return strategy
 
 
 def _can_skip_header_filter(schema: dict[str, Any]) -> bool:
