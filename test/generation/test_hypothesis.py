@@ -1575,6 +1575,25 @@ CANONICAL_OBJECT_SCHEMAS = [
             {"type": "object", "properties": {"a": {"minimum": 5}, "b": {"type": "string"}}},
         ]
     },
+    {"type": "object", "minProperties": 2},
+    {"type": "object", "maxProperties": 2},
+    {"type": "object", "minProperties": 2, "maxProperties": 2},
+    # A floor beyond the extra keys drawn by default.
+    {"type": "object", "minProperties": 8},
+    {"type": "object", "properties": {"a": {"type": "integer"}, "b": {"type": "string"}}, "minProperties": 1},
+    {"type": "object", "properties": {"a": {"type": "integer"}}, "required": ["a"], "maxProperties": 1},
+    {
+        "type": "object",
+        "properties": {"a": {"type": "integer"}, "b": {"type": "string"}},
+        "additionalProperties": False,
+        "minProperties": 2,
+    },
+    {"type": "object", "propertyNames": {"enum": ["a", "b", "c"]}, "minProperties": 2},
+    {"type": "object", "propertyNames": {"maxLength": 3}},
+    {"type": "object", "propertyNames": {"pattern": "^x"}, "maxProperties": 3},
+    {"type": "object", "propertyNames": {"pattern": "x[0-9]+"}, "minProperties": 2},
+    {"type": "object", "propertyNames": {"maxLength": 4, "pattern": "^x"}, "minProperties": 2},
+    {"type": "object", "propertyNames": {"anyOf": [{"pattern": "x[0-9]+"}, {"maxLength": 3}]}},
 ]
 
 
@@ -1594,9 +1613,6 @@ def test_canonical_object_generation(schema):
 
 UNSUPPORTED_OBJECT_SCHEMAS = [
     {"type": "object", "patternProperties": {"^a": {"type": "integer"}}},
-    {"type": "object", "propertyNames": {"maxLength": 3}},
-    {"type": "object", "minProperties": 2},
-    {"type": "object", "maxProperties": 2},
 ]
 
 
@@ -1615,6 +1631,30 @@ def test_canonical_object_generates_extra_properties():
         lambda value: set(value) - {"a"},
         settings=settings(max_examples=1000, database=None),
     )
+
+
+def test_canonical_object_reaches_the_property_ceiling():
+    # A ceiling narrows the sizes, it does not pin the object to its floor.
+    schema = {"type": "object", "properties": {"a": {"type": "integer"}}, "maxProperties": 3}
+    canonical_schema = jsonschema_rs.canonicalize(schema, draft=jsonschema_rs.Draft202012)
+
+    find(
+        strategy.from_schema(canonical_schema, StrategyContext()),
+        lambda value: len(value) == 3,
+        settings=settings(max_examples=1000, database=None),
+    )
+
+
+def test_canonical_object_prefers_documented_keys_for_the_floor():
+    schema = {"type": "object", "properties": {"a": {"type": "integer"}, "b": {"type": "string"}}, "minProperties": 2}
+    canonical_schema = jsonschema_rs.canonicalize(schema, draft=jsonschema_rs.Draft202012)
+
+    @given(strategy.from_schema(canonical_schema, StrategyContext()))
+    @settings(max_examples=50, deadline=None)
+    def test(value):
+        assert {"a", "b"} <= set(value), value
+
+    test()
 
 
 CLOSED_OBJECT_SCHEMAS = [
@@ -1802,6 +1842,40 @@ def test_canonical_array_respects_size_bounds():
         assert 2 <= len(value) <= 3, value
 
     test()
+
+
+CANONICAL_PATTERN_SCHEMAS = [
+    {"type": "string", "pattern": "^x"},
+    {"type": "string", "pattern": "x$"},
+    {"type": "string", "pattern": "^x$"},
+    {"type": "string", "pattern": "[0-9]{2}"},
+    {"type": "string", "pattern": "^x", "minLength": 3},
+    {"type": "string", "pattern": "[0-9]{2}", "maxLength": 4},
+]
+
+
+@pytest.mark.parametrize("schema", CANONICAL_PATTERN_SCHEMAS, ids=str)
+def test_canonical_string_pattern_generation(schema):
+    built = _canonical_strategy_or_none(schema, GenerationConfig(), jsonschema_rs.Draft202012Validator)
+    assert built is not None
+    is_valid = jsonschema_rs.Draft202012Validator(schema).is_valid
+
+    @given(built)
+    @settings(max_examples=25, deadline=None)
+    def test(value):
+        assert is_valid(value), value
+
+    test()
+
+
+def test_canonical_string_pattern_generates_around_the_match():
+    # A `pattern` is a search, so the value may carry anything around what the pattern matches.
+    built = _canonical_strategy_or_none(
+        {"type": "string", "pattern": "^x"}, GenerationConfig(), jsonschema_rs.Draft202012Validator
+    )
+    assert built is not None
+
+    find(built, lambda value: len(value) > 1, settings=settings(max_examples=1000, database=None))
 
 
 # Formats the validator asserts, so generated values can be checked against the schema itself.
